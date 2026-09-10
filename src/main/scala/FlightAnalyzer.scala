@@ -22,7 +22,6 @@ object FlightAnalyzer extends App with SessionWrapper {
   } catch {
     case e: IllegalArgumentException => {
       log.error("Invalid arguments provided", e)
-      log.error(s"Usage: FlightAnalyzer <airlines.csv> <airports.csv> <flights.csv> <output> [asc|desc]")
       throw e
     }
     case e: Throwable => {
