@@ -4,7 +4,7 @@ package preprocessing
 import validation.DfValidator
 import transformers.Transformers._
 
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{Column, DataFrame}
 import org.apache.spark.sql.functions._
 
 object RawData extends DfValidator {
@@ -17,33 +17,40 @@ object RawData extends DfValidator {
     "security_delay", "airline_delay", "late_aircraft_delay", "weather_delay"
   )
 
-  def prepareAirlines(airlinesDf: DataFrame): DataFrame = {
-    validateColumnPresence(requiredAirlines)(airlinesDf)
+  private def prepareReferenceData(
+                                    df: DataFrame,
+                                    requiredColumns: Seq[String],
+                                    condition: Column,
+                                    selectedColumns: Seq[Column],
+                                    dfName: String
+                                  ): DataFrame = {
 
-    val isNullIata = col("iata_code").isNull
+    validateColumnPresence(requiredColumns)(df)
 
-    val resultDf = airlinesDf
-      .transform(filterByCond(!isNullIata))
-      .transform(selectColumns(requiredAirlines.map(col)))
+    val resultDf = df
+      .transform(filterByCond(condition))
+      .transform(selectColumns(selectedColumns))
 
-    validateNotEmpty(resultDf, "airlines")
-
-    resultDf
-  }
-
-  def prepareAirports(airportsDf: DataFrame): DataFrame = {
-    validateColumnPresence(requiredAirports)(airportsDf)
-
-    val isNullAirport = col("airport").isNull
-
-    val resultDf = airportsDf.as("airp")
-      .transform(filterByCond(!isNullAirport))
-      .transform(selectColumns(Seq(col("airport"), col("iata_code"))))
-
-    validateNotEmpty(resultDf, "airports")
+    validateNotEmpty(resultDf, dfName)
 
     resultDf
   }
+
+  def prepareAirlines(airlinesDf: DataFrame): DataFrame = prepareReferenceData(
+    airlinesDf,
+    requiredAirlines,
+    col("iata_code").isNotNull,
+    requiredAirlines.map(col),
+    "airlines"
+  )
+
+  def prepareAirports(airportsDf: DataFrame): DataFrame = prepareReferenceData(
+    airportsDf,
+    requiredAirports,
+    col("airport").isNotNull,
+    Seq(col("airport"), col("iata_code")),
+    "airports"
+  )
 
   def prepareFlights(airlinesDf: DataFrame, airportsDf: DataFrame)(flightsDf: DataFrame): DataFrame = {
     validateColumnPresence(requiredFlights)(flightsDf)
@@ -67,5 +74,4 @@ object RawData extends DfValidator {
 
     resultDf
   }
-
 }

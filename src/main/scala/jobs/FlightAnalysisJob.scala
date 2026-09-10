@@ -10,8 +10,8 @@ import readers.CsvReader
 import schemas.Schemas
 import transformers.Transformers._
 import types.SortDirection
-import writers.Writers
 
+import com.example.writers.CsvWriter
 import org.apache.hadoop.fs.Path
 import org.apache.logging.log4j.{LogManager, Logger}
 import org.apache.spark.sql.expressions.Window
@@ -21,8 +21,10 @@ import org.apache.spark.sql.{Column, DataFrame, Row, SparkSession}
 import java.sql.{Date, Timestamp}
 import java.time.LocalDateTime
 
-class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
+final class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) extends Job {
   private val log: Logger = LogManager.getLogger(getClass)
+  private val reader = new CsvReader()
+  private val writer = new CsvWriter()
   private val metaDir: String = "meta"
   private val dataMartDir: String = "datamart"
   private val reportsDir: String = "reports"
@@ -37,7 +39,7 @@ class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
   private val delayDataMartPath: Path = new Path(dataMartPath, "delayDataMart")
   private implicit val sortDirection: SortDirection = config.sortDirection
 
-  def run(): Unit = {
+  override def run(): Unit = {
     log.info("Job started")
 
     val fs = targetPath.getFileSystem(spark.sparkContext.hadoopConfiguration)
@@ -46,9 +48,9 @@ class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
     val hasOriginToDestinationDataMartOld = fs.exists(originToDestinationDataMartPath)
     val hasDelayDataMartOld = fs.exists(delayDataMartPath)
 
-    val airlinesDf = readAirlines()
-    val airportsDf = readAirports()
-    val flightsDf = readFlights()
+    val airlinesDf = reader.read(config.airlinesPath, Schemas.airlines)
+    val airportsDf = reader.read(config.airportsPath, Schemas.airports)
+    val flightsDf = reader.read(config.flightsPath, Schemas.flights)
 
     val metaDf: DataFrame = getMeta(hasPreviousState)
       .persist()
@@ -143,24 +145,8 @@ class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
     }
   }
 
-  private def readFlights(): DataFrame = new CsvReader(CsvReader.Config(config.flightsPath, Schemas.flights)).read()
-  private def readAirlines(): DataFrame = new CsvReader(CsvReader.Config(config.airlinesPath, Schemas.airlines)).read()
-  private def readAirports(): DataFrame = new CsvReader(CsvReader.Config(config.airportsPath, Schemas.airports)).read()
-  private def readOriginAirportAirlineDataMart(): DataFrame = new CsvReader(
-    CsvReader.Config(originAirportAirlineDataMartPath.toString, Schemas.originAirportAirline)
-  ).read()
-  private def readOriginToDestinationDataMart(): DataFrame = new CsvReader(
-    CsvReader.Config(originToDestinationDataMartPath.toString, Schemas.originToDestination)
-  ).read()
-  private def readDelayDataMart(): DataFrame = new CsvReader(
-    CsvReader.Config(delayDataMartPath.toString, Schemas.delay)
-  ).read()
-  private def readMeta(): DataFrame = new CsvReader(
-    CsvReader.Config(new Path(metaPath, "meta_info").toString, Schemas.metaInfo)
-  ).read()
-
   private def getMeta(exists: Boolean): DataFrame  = {
-    if (exists) readMeta()
+    if (exists) reader.read(new Path(metaPath, "meta_info").toString, Schemas.metaInfo)
     else spark.createDataFrame(spark.sparkContext.emptyRDD[Row], Schemas.metaInfo)
   }
 
@@ -180,13 +166,16 @@ class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
     val delayDataMartNewDf = df.transform(delayDataMart)
 
     val originAirportAirlineDataMartOldDf =
-      if (dataMartFlg("hasOriginAirportAirlineDataMartOld")) readOriginAirportAirlineDataMart()
+      if (dataMartFlg("hasOriginAirportAirlineDataMartOld"))
+        reader.read(originAirportAirlineDataMartPath.toString, Schemas.originAirportAirline)
       else spark.createDataFrame(spark.sparkContext.emptyRDD[Row], Schemas.originAirportAirline)
     val originToDestinationDataMartOldDf =
-      if (dataMartFlg("hasOriginToDestinationDataMartOld")) readOriginToDestinationDataMart()
+      if (dataMartFlg("hasOriginToDestinationDataMartOld"))
+        reader.read(originToDestinationDataMartPath.toString, Schemas.originToDestination)
       else spark.createDataFrame(spark.sparkContext.emptyRDD[Row], Schemas.originToDestination)
     val delayDataMartOldDf =
-      if (dataMartFlg("hasDelayDataMartOld")) readDelayDataMart()
+      if (dataMartFlg("hasDelayDataMartOld"))
+        reader.read(delayDataMartPath.toString, Schemas.delay)
       else spark.createDataFrame(spark.sparkContext.emptyRDD[Row], Schemas.delay)
 
     val originAirportAirlineDataMartDf = originAirportAirlineDataMartNewDf
@@ -248,20 +237,20 @@ class FlightAnalysisJob(config: JobConfig)(implicit spark: SparkSession) {
 
   private def reportsWriter(reports: Map[String, DataFrame], reportsPath: Path): Unit = reports.foreach {
     case (key, reportDf) => {
-      Writers.writeCsv(reportDf, new Path(reportsPath, key.dropRight(2)).toString)
+      writer.write(reportDf, new Path(reportsPath, key.dropRight(2)).toString)
       log.info(s"Report ${key.dropRight(2)} written to: ${new Path(reportsPath, key.dropRight(2))}")
     }
   }
 
   private def dataMartsWriter(dataMarts: Map[String, DataFrame], dataMartPath: Path): Unit = dataMarts.foreach {
     case (key, dataMartDf) => {
-      Writers.writeCsv(dataMartDf, new Path(dataMartPath, s"${key.dropRight(2)}").toString)
+      writer.write(dataMartDf, new Path(dataMartPath, s"${key.dropRight(2)}").toString)
       log.info(s"DataMart ${key.dropRight(2)} written to: $dataMartPath")
     }
   }
 
   private def metaWriter(df: DataFrame, metaPath: Path): Unit = {
-    Writers.writeCsv(df, new Path(metaPath, "meta_info").toString)
+    writer.write(df, new Path(metaPath, "meta_info").toString)
     log.info(s"Meta information written to: ${new Path(metaPath, "meta_info")}")
   }
 }
